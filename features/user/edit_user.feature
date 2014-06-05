@@ -1,12 +1,12 @@
 @javascript
 Feature: Edit a user
   In order to manage the users and rights
-  As Peter
+  As an administrator
   I need to be able to edit a user
 
   Background:
     Given the "default" catalog configuration
-    And I am logged in as "admin"
+    And I am logged in as "Peter"
 
   Scenario: Successfully edit a user
     Given I edit the "admin" user
