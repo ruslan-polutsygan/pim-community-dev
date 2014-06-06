@@ -21,7 +21,7 @@ users:
         catalog_locale: de_DE
         catalog_scope: ecommerce
         default_tree: master
-        role: ROLE_ADMINISTRATOR
+        role: ROLE_MANAGER
         enable: true
     mary:
         username: mary
@@ -33,7 +33,7 @@ users:
         catalog_locale: en_US
         catalog_scope: ecommerce
         default_tree: master
-        role: ROLE_ADMINISTRATOR
+        role: ROLE_USER
         enable: true
     sandra:
         username: sandra
@@ -45,7 +45,7 @@ users:
         catalog_locale: en_US
         catalog_scope: ecommerce
         default_tree: master
-        role: ROLE_ADMINISTRATOR
+        role: ROLE_USER
         enable: true
     peter:
         username: peter
