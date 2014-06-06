@@ -7,6 +7,10 @@ use Doctrine\ORM\Event\OnFlushEventArgs;
 use Doctrine\ORM\Event\PostFlushEventArgs;
 use Symfony\Component\Serializer\Normalizer\NormalizerInterface;
 use Doctrine\Common\Persistence\ManagerRegistry;
+use Pim\Bundle\CatalogBundle\Entity\AttributeOptionValue;
+use Pim\Bundle\CatalogBundle\Entity\Family;
+use Pim\Bundle\CatalogBundle\Entity\Channel;
+use Pim\Bundle\CatalogBundle\Manager\ChannelManager;
 
 /**
  * Sets the normalized data of a Product document when related entities are modified
@@ -26,37 +30,27 @@ class UpdateNormalizedProductDataSubscriber implements EventSubscriber
     /** @var string */
     protected $productClass;
 
-    /** @var string */
-    protected $entityMapping = [
-        'Pim\Bundle\CatalogBundle\Model\AbstractAttribute' => 'Attribute',
-        'Pim\Bundle\CatalogBundle\Entity\Family'           => 'Family',
-        'Pim\Bundle\CatalogBundle\Entity\Channel'          => 'Channel',
-    ];
+    /** @var ChannelManager */
+    protected $channelManager;
 
-    /**
-     * Ids of documents to update
+    /** 
+     * Actions to be executed following changes on Entities
      *
-     * @var string[]
      */
-    protected $pendingProducts = array();
-
-    /**
-     * Ids of updated documents
-     *
-     * @var string[]
-     */
-    protected $updatedProducts = array();
+    protected $pendingActions = array();
 
     /**
      * @param ManagerRegistry     $registry
      * @param NormalizerInterface $normalizer
      * @param string              $productClass
+     * @param ChannelManager      $channelManager
      */
-    public function __construct(ManagerRegistry $registry, NormalizerInterface $normalizer, $productClass)
+    public function __construct(ManagerRegistry $registry, NormalizerInterface $normalizer, $productClass, ChannelManager $channelManager)
     {
-        $this->registry     = $registry;
-        $this->normalizer   = $normalizer;
-        $this->productClass = $productClass;
+        $this->registry       = $registry;
+        $this->normalizer     = $normalizer;
+        $this->productClass   = $productClass;
+        $this->channelManager = $channelManager;
     }
 
     /**
@@ -75,91 +69,135 @@ class UpdateNormalizedProductDataSubscriber implements EventSubscriber
         $uow = $args->getEntityManager()->getUnitOfWork();
 
         foreach ($uow->getScheduledEntityUpdates() as $entity) {
-            $this->scheduleRelatedProducts($entity);
+            error_log("DEBUG entity in scheduledEntityUpdates:".get_class($entity));
+            if ($entity instanceof AttributeOptionValue) {
+                $this->scheduleForAttributeOptionValue();
+            }
+
+            if ($entity instanceof Family) {
+                //TODO :  check if family labels have changed and schedule a massive update
+                //on family label
+                // Priority 1
+            }
+            if ($entity instanceof Channel) {
+                //TODO :  check if a locale has been removed from the locale list
+                //on family label and remove normalizedData
+                // Priority 2
+            }
+            
+        }
+
+        foreach ($uow->getScheduledEntityInsertions() as $entity) {
+            error_log("DEBUG entity in scheduledEntityUpdates:".get_class($entity));
+            if ($entity instanceof AttributeOptionValue) {
+                $this->scheduleForAttributeOptionValue();
+            }
         }
 
         foreach ($uow->getScheduledEntityDeletions() as $entity) {
-            $this->scheduleRelatedProducts($entity);
-        }
-
-        foreach ($uow->getScheduledCollectionDeletions() as $entity) {
-            $this->scheduleRelatedProducts($entity);
-        }
-
-        foreach ($uow->getScheduledCollectionUpdates() as $entity) {
-            $this->scheduleRelatedProducts($entity);
+            error_log("DEBUG entity in scheduledEntityDeletions:".get_class($entity));
+            if ($entity instanceof AttributeOptionValue) {
+                $this->scheduleForAttributeOptionValue();
+            }
+            if ($entity instanceof Family) {
+                //TODO :  check if family and remove family from linked products
+                // Priority 1
+            }
+            if ($entity instanceof Channel) {
+                //TODO : cleanup normalizedData
+                // Priority 2
+            }
+            if ($entity instanceof AttributeOption) {
+                //TODO : cleanup normalizedData
+                // Priority 2
+            }
         }
     }
+
+    /**
+     * Schedule actions to apply on the products when an AttributeOptionValue
+     * has been changed
+     *
+     * @param AttributeOptionValue $attributeOptionValue
+     */
+    protected function scheduleForAttributeOptionValue(AttributeOptionValue $optionValue)
+    {
+        $attribute = $optionValue->getAttributeOption()->getAttribute();
+        $fieldNames = $this->getFieldNames($attribute);
+
+        $actions = array();
+
+        if ('options' === $attribute->getBackendType()) {
+            $actions = $this->getActionsForMultiOptions($optionValue, $fieldNames);
+        } else {
+            $actions = $this->getActionsForUniqueOption($optionValue, $fieldNames);
+        }
+        $this->pendingActions = $actions + $this->pendingActions;
+    }
+
+    /**
+     * Get actions fo
+
+    /**
+     * Generates all field names variations from attribute code
+     * and locale and channel
+     *
+     * @param AbstractAttribute
+     *
+     * @return array
+     */
+    protected function getFieldNames(AbstractAttribute $attribute)
+    {
+        $fieldNames = array();
+
+        foreach($this->getChannels() as $channel) {
+            foreach($channel->getLocales() as $locale) {
+                $fieldNames[] = $this->getFieldName($attribute, $channel, $locale);
+            }
+        }
+
+        return array_unique($fieldNames);
+    }
+
+    /**                                                                                             
+     * Get the field name for normalized data
+     *
+     * @param AbstractAttribute $attribute
+     * @param Channel           $channel
+     * @param Locale            $locale
+     *
+     * @return string
+     */
+    protected function getFieldName(AbstractAttribute $attribute, Channel $channel, Locale $locale)
+    {
+        $suffix = '';
+
+        if ($attribute->isLocalizable()) {
+            $suffix = sprintf('-%s', $locale->getCode());
+        }
+        if ($attribute->isScopable()) {
+            $suffix .= sprintf('-%s', $channel->getCode());
+        }
+
+        return $attribute->getCode() . $suffix;
+    }
+     
+
 
     /**
      * @param PostFlushEventArgs $args
      */
     public function postFlush(PostFlushEventArgs $args)
     {
-        $this->processPendingProducts();
+        $this->executePendingActions();
     }
 
     /**
-     * Schedule products related to the entity for normalized data recalculation
-     *
-     * @param object $entity
+     * Execute pending actions
      */
-    protected function scheduleRelatedProducts($entity)
+    public function executePendingActions()
     {
-        $productIds = $this->getRelatedProductIds($entity);
-        foreach ($productIds as $id) {
-            if (!in_array($id, $this->pendingProducts) && !in_array($id, $this->updatedProducts)) {
-                $this->pendingProducts[] = $id;
-            }
-        }
+        //TODO ...
     }
 
-    /**
-     * Find ids of products related to the entity
-     *
-     * @param object $entity
-     *
-     * @return array
-     */
-    protected function getRelatedProductIds($entity)
-    {
-        $repository = $this->registry->getRepository($this->productClass);
-
-        foreach ($this->entityMapping as $class => $name) {
-            if ($entity instanceof $class) {
-                $method = sprintf('findAllIdsFor%s', $name);
-
-                if (method_exists($repository, $method)) {
-                    return $repository->$method($entity);
-                }
-            }
-        }
-
-        return [];
-    }
-
-    /**
-     * Process products that are scheduled for normalized data recalculation
-     */
-    protected function processPendingProducts()
-    {
-        $manager = $this->registry->getManagerForClass($this->productClass);
-
-        foreach ($this->pendingProducts as $productId) {
-            $product = $manager->getRepository($this->productClass)->find($productId);
-            if ($product) {
-                $product->setNormalizedData($this->normalizer->normalize($product, 'mongodb_json'));
-                $manager->persist($product);
-
-                $this->updatedProducts[] = $productId;
-            }
-        }
-
-        $this->pendingProducts = array();
-
-        $updatedCount = count($this->updatedProducts);
-        if ($updatedCount) {
-            $manager->flush();
-        }
-    }
 }
