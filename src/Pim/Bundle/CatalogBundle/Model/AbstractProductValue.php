@@ -647,11 +647,16 @@ abstract class AbstractProductValue implements ProductValueInterface
     /**
      * Get prices
      *
-     * @return array
+     * @return Collection
      */
     public function getPrices()
     {
-        return $this->prices;
+        $_prices = new ArrayCollection();
+        foreach ($this->prices as $price) {
+            $_prices[$price->getCurrency()] = $price;
+        }
+
+        return $_prices;
     }
 
     /**
